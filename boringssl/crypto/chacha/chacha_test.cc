@@ -18,8 +18,15 @@
 
 #include <memory>
 
+#include <gtest/gtest.h>
+
 #include <openssl/crypto.h>
 #include <openssl/chacha.h>
+
+#include "internal.h"
+#include "../internal.h"
+#include "../test/abi_test.h"
+#include "../test/test_util.h"
 
 
 static const uint8_t kKey[32] = {
@@ -214,44 +221,40 @@ static const uint8_t kOutput[] = {
 static_assert(sizeof(kInput) == sizeof(kOutput),
               "Input and output lengths don't match.");
 
-static bool TestChaCha20(size_t len) {
-  std::unique_ptr<uint8_t[]> buf(new uint8_t[len]);
-  CRYPTO_chacha_20(buf.get(), kInput, len, kKey, kNonce, kCounter);
-  if (memcmp(buf.get(), kOutput, len) != 0) {
-    fprintf(stderr, "Mismatch at length %u.\n", static_cast<unsigned>(len));
-    return false;
-  }
-
-  // Test in-place at various offsets.
-  static const size_t kOffsets[] = {
-      0,  1,  2,  8,  15, 16,  17,  31,  32,  33,  63,
-      64, 65, 95, 96, 97, 127, 128, 129, 255, 256, 257,
-  };
-  for (size_t offset : kOffsets) {
-    buf.reset(new uint8_t[len + offset]);
-    memcpy(buf.get() + offset, kInput, len);
-    CRYPTO_chacha_20(buf.get(), buf.get() + offset, len, kKey, kNonce,
-                     kCounter);
-    if (memcmp(buf.get(), kOutput, len) != 0) {
-      fprintf(stderr, "Mismatch at length %u with in-place offset %u.\n",
-              static_cast<unsigned>(len), static_cast<unsigned>(offset));
-      return false;
-    }
-  }
-
-  return true;
-}
-
-int main(int argc, char **argv) {
-  CRYPTO_library_init();
-
+TEST(ChaChaTest, TestVector) {
   // Run the test with the test vector at all lengths.
   for (size_t len = 0; len <= sizeof(kInput); len++) {
-    if (!TestChaCha20(len)) {
-      return 1;
-    }
+    SCOPED_TRACE(len);
+
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[len]);
+    CRYPTO_chacha_20(buf.get(), kInput, len, kKey, kNonce, kCounter);
+    EXPECT_EQ(Bytes(kOutput, len), Bytes(buf.get(), len));
+
+    // Test the in-place version.
+    OPENSSL_memcpy(buf.get(), kInput, len);
+    CRYPTO_chacha_20(buf.get(), buf.get(), len, kKey, kNonce, kCounter);
+    EXPECT_EQ(Bytes(kOutput, len), Bytes(buf.get(), len));
+  }
+}
+
+#if defined(CHACHA20_ASM) && defined(SUPPORTS_ABI_TEST)
+TEST(ChaChaTest, ABI) {
+  uint32_t key[8];
+  OPENSSL_memcpy(key, kKey, sizeof(key));
+
+  static const uint32_t kCounterNonce[4] = {0};
+
+  std::unique_ptr<uint8_t[]> buf(new uint8_t[sizeof(kInput)]);
+  for (size_t len = 0; len <= 32; len++) {
+    SCOPED_TRACE(len);
+    CHECK_ABI(ChaCha20_ctr32, buf.get(), kInput, len, key, kCounterNonce);
   }
 
-  printf("PASS\n");
-  return 0;
+  for (size_t len : {32 * 2, 32 * 4, 32 * 8, 32 * 16, 32 * 24}) {
+    SCOPED_TRACE(len);
+    CHECK_ABI(ChaCha20_ctr32, buf.get(), kInput, len, key, kCounterNonce);
+    // Cover the partial block paths.
+    CHECK_ABI(ChaCha20_ctr32, buf.get(), kInput, len + 15, key, kCounterNonce);
+  }
 }
+#endif  // CHACHA20_ASM && SUPPORTS_ABI_TEST
