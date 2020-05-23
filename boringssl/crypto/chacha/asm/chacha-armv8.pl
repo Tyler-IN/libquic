@@ -1,4 +1,11 @@
-#!/usr/bin/env perl
+#! /usr/bin/env perl
+# Copyright 2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 #
 # ====================================================================
 # Written by Andy Polyakov <appro@openssl.org> for the OpenSSL
@@ -8,7 +15,7 @@
 # ====================================================================
 #
 # June 2015
-# 
+#
 # ChaCha20 for ARMv8.
 #
 # Performance in cycles per byte out of large buffer.
@@ -20,6 +27,8 @@
 # Cortex-A57		8.06/+43%       4.90            4.43(**)
 # Denver		4.50/+82%       2.63		2.67(*)
 # X-Gene		9.50/+46%       8.82		8.89(*)
+# Mongoose		8.00/+44%	3.64		3.25
+# Kryo			8.17/+50%	4.83		4.65
 #
 # (*)	it's expected that doubling interleave factor doesn't help
 #	all processors, only those with higher NEON latency and
@@ -113,9 +122,9 @@ my ($a3,$b3,$c3,$d3)=map(($_&~3)+(($_+1)&3),($a2,$b2,$c2,$d2));
 $code.=<<___;
 #include <openssl/arm_arch.h>
 
-.text
-
 .extern	OPENSSL_armcap_P
+
+.section .rodata
 
 .align	5
 .Lsigma:
@@ -130,20 +139,18 @@ $code.=<<___;
 #endif
 .asciz	"ChaCha20 for ARMv8, CRYPTOGAMS by <appro\@openssl.org>"
 
+.text
+
 .globl	ChaCha20_ctr32
 .type	ChaCha20_ctr32,%function
 .align	5
 ChaCha20_ctr32:
 	cbz	$len,.Labort
-	adr	@x[0],.LOPENSSL_armcap_P
+	adrp	@x[0],:pg_hi21:OPENSSL_armcap_P
 	cmp	$len,#192
 	b.lo	.Lshort
-#ifdef	__ILP32__
-	ldrsw	@x[1],[@x[0]]
-#else
-	ldr	@x[1],[@x[0]]
-#endif
-	ldr	w17,[@x[1],@x[0]]
+	add	@x[0],@x[0],:lo12:OPENSSL_armcap_P
+	ldr	w17,[@x[0]]
 	tst	w17,#ARMV7_NEON
 	b.ne	ChaCha20_neon
 
@@ -151,7 +158,8 @@ ChaCha20_ctr32:
 	stp	x29,x30,[sp,#-96]!
 	add	x29,sp,#0
 
-	adr	@x[0],.Lsigma
+	adrp	@x[0],:pg_hi21:.Lsigma
+	add	@x[0],@x[0],:lo12:.Lsigma
 	stp	x19,x20,[sp,#16]
 	stp	x21,x22,[sp,#32]
 	stp	x23,x24,[sp,#48]
@@ -193,7 +201,7 @@ ChaCha20_ctr32:
 	mov	$ctr,#10
 	subs	$len,$len,#64
 .Loop:
-	sub	$ctr,$ctr,#1	
+	sub	$ctr,$ctr,#1
 ___
 	foreach (&ROUND(0, 4, 8,12)) { eval; }
 	foreach (&ROUND(0, 5,10,15)) { eval; }
@@ -371,7 +379,8 @@ ChaCha20_neon:
 	stp	x29,x30,[sp,#-96]!
 	add	x29,sp,#0
 
-	adr	@x[0],.Lsigma
+	adrp	@x[0],:pg_hi21:.Lsigma
+	add	@x[0],@x[0],:lo12:.Lsigma
 	stp	x19,x20,[sp,#16]
 	stp	x21,x22,[sp,#32]
 	stp	x23,x24,[sp,#48]
@@ -690,7 +699,8 @@ ChaCha20_512_neon:
 	stp	x29,x30,[sp,#-96]!
 	add	x29,sp,#0
 
-	adr	@x[0],.Lsigma
+	adrp	@x[0],:pg_hi21:.Lsigma
+	add	@x[0],@x[0],:lo12:.Lsigma
 	stp	x19,x20,[sp,#16]
 	stp	x21,x22,[sp,#32]
 	stp	x23,x24,[sp,#48]
@@ -1124,4 +1134,4 @@ foreach (split("\n",$code)) {
 
 	print $_,"\n";
 }
-close STDOUT;	# flush
+close STDOUT or die "error closing STDOUT";	# flush
